@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { prisma } from "@/lib/prisma";
+import { Label } from "@/components/ui";
 
 export const dynamic = "force-dynamic";
 
@@ -12,16 +13,12 @@ export default async function Home() {
 
   return (
     <main className="wrap">
-      <p className="muted" style={{ letterSpacing: 4, textTransform: "uppercase", fontSize: 12 }}>
-        Italian soul, Iranian taste
-      </p>
+      <Label letterSpacing={4}>Italian soul, Iranian taste</Label>
       <h1 style={{ marginTop: 12 }}>Where is MILO next?</h1>
 
       {next ? (
         <div className="card">
-          <p className="muted" style={{ fontSize: 12, letterSpacing: 3, textTransform: "uppercase" }}>
-            Next residency
-          </p>
+          <Label>Next residency</Label>
           <h2 style={{ fontSize: 30, marginTop: 8 }}>{next.name}</h2>
           <p className="muted">{next.location}</p>
           <p className="muted">{new Date(next.startsAt).toDateString()}</p>

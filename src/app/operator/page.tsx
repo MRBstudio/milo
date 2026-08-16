@@ -1,5 +1,7 @@
 "use client";
 import { useEffect, useState } from "react";
+import { Msg, requestJson } from "@/lib/api-client";
+import { ErrorText, Row } from "@/components/ui";
 
 export default function Operator() {
   const [pw, setPw] = useState("");
@@ -8,21 +10,20 @@ export default function Operator() {
   const [drops, setDrops] = useState<{ id: string; name: string; status: string; admission: string }[]>([]);
   const [data, setData] = useState<any>(null);
   const [code, setCode] = useState("");
-  const [msg, setMsg] = useState<{ text: string; ok?: boolean } | null>(null);
+  const [msg, setMsg] = useState<Msg | null>(null);
 
   useEffect(() => {
-    fetch("/api/drops").then((r) => r.json()).then((d) => setDrops(d.drops));
+    requestJson<{ drops: typeof drops }>("/api/drops").then(({ data }) => setDrops(data.drops));
   }, []);
 
   async function load() {
     setMsg(null);
-    const res = await fetch(`/api/operator/live?dropId=${dropId}`, {
+    const { ok: authed, data } = await requestJson(`/api/operator/live?dropId=${dropId}`, {
       headers: { "x-operator-password": pw },
     });
-    if (res.ok) {
-      setData(await res.json());
+    if (authed) {
+      setData(data);
       setOk(true);
-      setMsg(null);
     } else {
       setMsg({ text: "Wrong password" });
     }
@@ -30,13 +31,13 @@ export default function Operator() {
 
   async function act(action: string) {
     setMsg(null);
-    const res = await fetch(`/api/operator/${action}`, {
+    const isOrderAction = action === "pay" || action === "collect" || action === "cancel";
+    const { ok: done, data: d } = await requestJson(`/api/operator/${action}`, {
       method: "POST",
-      headers: { "Content-Type": "application/json", "x-operator-password": pw },
-      body: JSON.stringify(action === "pay" || action === "collect" || action === "cancel" ? { code } : { dropId }),
+      headers: { "x-operator-password": pw },
+      body: isOrderAction ? { code } : { dropId },
     });
-    const d = await res.json();
-    if (res.ok) {
+    if (done) {
       setMsg({ text: `Done: ${code}`, ok: true });
       setCode("");
       load(); // refresh live view
@@ -60,7 +61,7 @@ export default function Operator() {
             ))}
           </select>
           <button onClick={load} style={{ marginTop: 8 }}>Enter</button>
-          {msg && <p style={{ marginTop: 8, color: "#c45c4a" }}>{msg.text}</p>}
+          {msg && <ErrorText style={{ marginTop: 8 }}>{msg.text}</ErrorText>}
         </div>
       ) : (
         <>
@@ -92,18 +93,21 @@ export default function Operator() {
             <div className="card" style={{ marginTop: 16 }}>
               <strong>Live inventory</strong>
               {data.items.map((i: any) => (
-                <div key={i.id} style={{ display: "flex", justifyContent: "space-between", marginTop: 8 }}>
-                  <span>{i.menuItem.name}</span>
-                  <span className="muted">{i.available} left · {i.sold} sold</span>
-                </div>
+                <Row
+                  key={i.id}
+                  left={<span>{i.menuItem.name}</span>}
+                  right={<span className="muted">{i.available} left · {i.sold} sold</span>}
+                />
               ))}
               <div style={{ borderTop: "1px solid #3a3a33", marginTop: 12, paddingTop: 12 }}>
                 <strong>Order counts</strong>
                 {data.statusCounts.map((s: any) => (
-                  <div key={s.status} style={{ display: "flex", justifyContent: "space-between", marginTop: 6 }}>
-                    <span className="muted">{s.status}</span>
-                    <span>{s._count._all}</span>
-                  </div>
+                  <Row
+                    key={s.status}
+                    style={{ marginTop: 6 }}
+                    left={<span className="muted">{s.status}</span>}
+                    right={<span>{s._count._all}</span>}
+                  />
                 ))}
               </div>
             </div>

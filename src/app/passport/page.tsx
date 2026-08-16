@@ -1,6 +1,8 @@
 "use client";
 import { useState } from "react";
-import Link from "next/link";
+import { requestJson } from "@/lib/api-client";
+import { BackLink, Label, PhoneInput, Row } from "@/components/ui";
+import { PHONE_LENGTH } from "@/lib/validation";
 
 export default function PassportPage() {
   const [phone, setPhone] = useState("");
@@ -9,8 +11,8 @@ export default function PassportPage() {
 
   async function look() {
     setLoading(true);
-    const res = await fetch(`/api/passport?phone=${encodeURIComponent(phone)}`);
-    setData(await res.json());
+    const { data } = await requestJson(`/api/passport?phone=${encodeURIComponent(phone)}`);
+    setData(data);
     setLoading(false);
   }
 
@@ -18,8 +20,8 @@ export default function PassportPage() {
     <main className="wrap">
       <h1>MILO Passport</h1>
       <div className="card">
-        <input placeholder="Your phone (09xxxxxxxxx)" value={phone} onChange={(e) => setPhone(e.target.value)} maxLength={11} />
-        <button onClick={look} disabled={loading || phone.length < 11} style={{ marginTop: 8 }}>
+        <PhoneInput value={phone} onChange={setPhone} label="Your phone" />
+        <button onClick={look} disabled={loading || phone.length < PHONE_LENGTH} style={{ marginTop: 8 }}>
           {loading ? "…" : "Open passport"}
         </button>
       </div>
@@ -30,22 +32,17 @@ export default function PassportPage() {
       )}
       {data?.exists && (
         <div className="card" style={{ marginTop: 16 }}>
-          <p className="muted" style={{ letterSpacing: 3, fontSize: 12, textTransform: "uppercase" }}>Traveler No.</p>
+          <Label>Traveler No.</Label>
           <h2>{data.travelerNumber}</h2>
           {data.foundingTraveler && <p style={{ color: "#8b4a2f", fontWeight: 500 }}>Founding Traveler</p>}
-          <p className="muted" style={{ marginTop: 16, letterSpacing: 2, textTransform: "uppercase", fontSize: 12 }}>Stamps</p>
+          <Label letterSpacing={2} style={{ marginTop: 16 }}>Stamps</Label>
           {data.stamps.length === 0 && <p className="muted" style={{ marginTop: 8 }}>No stamps yet.</p>}
           {data.stamps.map((s: any, i: number) => (
-            <div key={i} style={{ marginTop: 8, display: "flex", justifyContent: "space-between" }}>
-              <span>{s.dropName}</span>
-              <span className="muted">{s.location}</span>
-            </div>
+            <Row key={i} left={<span>{s.dropName}</span>} right={<span className="muted">{s.location}</span>} />
           ))}
         </div>
       )}
-      <Link href="/">
-        <p className="muted" style={{ marginTop: 32, fontSize: 13 }}>← Back to MILO</p>
-      </Link>
+      <BackLink />
     </main>
   );
 }
