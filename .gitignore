@@ -12,6 +12,9 @@ out/
 .env.local
 .env.production.local
 
+# tests
+coverage/
+
 # debug
 npm-debug.log*
 
