@@ -42,4 +42,12 @@ async function main() {
   console.log("Seeded drop:", drop.slug);
 }
 
-main().finally(() => prisma.$disconnect());
+main()
+  .then(async () => {
+    await prisma.$disconnect();
+  })
+  .catch(async (err) => {
+    console.error("Seed failed:", err);
+    await prisma.$disconnect();
+    process.exit(1);
+  });

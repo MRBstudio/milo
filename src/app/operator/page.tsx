@@ -1,5 +1,6 @@
 "use client";
 import { useEffect, useState } from "react";
+import { RequestError, errorMessage, fetchJson } from "@/lib/api-client";
 
 export default function Operator() {
   const [pw, setPw] = useState("");
@@ -11,38 +12,52 @@ export default function Operator() {
   const [msg, setMsg] = useState<{ text: string; ok?: boolean } | null>(null);
 
   useEffect(() => {
-    fetch("/api/drops").then((r) => r.json()).then((d) => setDrops(d.drops));
+    fetchJson<{ drops: typeof drops }>("/api/drops")
+      .then((d) => setDrops(d.drops))
+      .catch((err) => {
+        console.error("Failed to load drops", err);
+        setMsg({ text: `Could not load drops: ${errorMessage(err)}` });
+      });
   }, []);
 
-  async function load() {
-    setMsg(null);
-    const res = await fetch(`/api/operator/live?dropId=${dropId}`, {
-      headers: { "x-operator-password": pw },
-    });
-    if (res.ok) {
-      setData(await res.json());
+  /** Loads the live view; returns an error message on failure instead of throwing. */
+  async function refresh(): Promise<string | null> {
+    if (!dropId) return "Select a drop first";
+    try {
+      setData(await fetchJson(`/api/operator/live?dropId=${encodeURIComponent(dropId)}`, {
+        headers: { "x-operator-password": pw },
+      }));
       setOk(true);
-      setMsg(null);
-    } else {
-      setMsg({ text: "Wrong password" });
+      return null;
+    } catch (err) {
+      console.error("Operator live view failed", err);
+      return err instanceof RequestError && err.status === 401 ? "Wrong password" : errorMessage(err);
     }
+  }
+
+  async function load() {
+    const error = await refresh();
+    setMsg(error ? { text: error } : null);
   }
 
   async function act(action: string) {
     setMsg(null);
-    const res = await fetch(`/api/operator/${action}`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "x-operator-password": pw },
-      body: JSON.stringify(action === "pay" || action === "collect" || action === "cancel" ? { code } : { dropId }),
-    });
-    const d = await res.json();
-    if (res.ok) {
-      setMsg({ text: `Done: ${code}`, ok: true });
+    const forCode = action === "pay" || action === "collect" || action === "cancel";
+    try {
+      await fetchJson(`/api/operator/${action}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "x-operator-password": pw },
+        body: JSON.stringify(forCode ? { code } : { dropId }),
+      });
+      setMsg({ text: forCode ? `Done: ${code}` : "Done", ok: true });
       setCode("");
-      load(); // refresh live view
-    } else {
-      setMsg({ text: `Error: ${d.error}` });
+    } catch (err) {
+      console.error(`Operator action ${action} failed`, err);
+      setMsg({ text: `Error: ${errorMessage(err)}` });
     }
+    // Refresh the live view either way: the action may have partially applied.
+    const refreshError = await refresh();
+    if (refreshError) setMsg({ text: `Live view stale: ${refreshError}` });
   }
 
   return (

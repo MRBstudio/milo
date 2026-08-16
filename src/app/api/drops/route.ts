@@ -1,7 +1,8 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { route } from "@/lib/http";
 
-export async function GET() {
+export const GET = route("drops.list", async () => {
   const drops = await prisma.drop.findMany({
     orderBy: { startsAt: "asc" },
     select: {
@@ -10,4 +11,4 @@ export async function GET() {
     },
   });
   return NextResponse.json({ drops });
-}
+});

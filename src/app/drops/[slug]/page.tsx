@@ -2,6 +2,7 @@
 import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
+import { errorMessage, fetchJson } from "@/lib/api-client";
 
 type Item = { id: string; capacity: number; available: number; reserved: number; sold: number; menuItem: { name: string; price: number; description: string } };
 type Drop = { id: string; name: string; location: string; admission: string; status: string; items: Item[] };
@@ -13,12 +14,32 @@ export default function DropPage() {
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
   const [msg, setMsg] = useState<{ text: string; ok?: boolean } | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
-    fetch(`/api/drops/${slug}`)
-      .then((r) => r.json())
-      .then((d) => setDrop(d.drop));
+    let cancelled = false;
+    fetchJson<{ drop: Drop }>(`/api/drops/${slug}`)
+      .then((d) => {
+        if (!cancelled) setDrop(d.drop);
+      })
+      .catch((err) => {
+        console.error(`Failed to load drop ${slug}`, err);
+        if (!cancelled) setLoadError(errorMessage(err));
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [slug]);
+
+  if (loadError) {
+    return (
+      <main className="wrap">
+        <p style={{ color: "#c45c4a" }}>{loadError}</p>
+        <Link href="/"><p className="muted" style={{ marginTop: 24, fontSize: 13 }}>← Back to MILO</p></Link>
+      </main>
+    );
+  }
 
   if (!drop) return <main className="wrap"><p className="muted">Loading…</p></main>;
 
@@ -43,16 +64,20 @@ export default function DropPage() {
     const lines = Object.entries(cart)
       .filter(([, q]) => q > 0)
       .map(([dropItemId, qty]) => ({ dropItemId, qty }));
-    const res = await fetch("/api/reservations", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ dropId: drop!.id, name, phone, lines }),
-    });
-    const data = await res.json();
-    if (res.ok) {
+
+    setSubmitting(true);
+    try {
+      const data = await fetchJson<{ code: string }>("/api/reservations", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ dropId: drop!.id, name, phone, lines }),
+      });
       setMsg({ text: data.code, ok: true });
-    } else {
-      setMsg({ text: data.error === "SOLD_OUT" ? "Sold out." : data.error === "ALREADY_RESERVED" ? "You already have a reservation for this drop." : data.error });
+    } catch (err) {
+      console.error("Reservation failed", err);
+      setMsg({ text: errorMessage(err) });
+    } finally {
+      setSubmitting(false);
     }
   }
 
@@ -160,10 +185,10 @@ export default function DropPage() {
         </p>
         <button
           onClick={reserve}
-          disabled={!name || !phone || total === 0 || drop.admission !== "OPEN"}
+          disabled={submitting || !name || !phone || total === 0 || drop.admission !== "OPEN"}
           style={{ marginTop: 12, width: "100%" }}
         >
-          Reserve
+          {submitting ? "Reserving…" : "Reserve"}
         </button>
         {msg && !msg.ok && <p style={{ marginTop: 12, color: "#c45c4a" }}>{msg.text}</p>}
       </div>
