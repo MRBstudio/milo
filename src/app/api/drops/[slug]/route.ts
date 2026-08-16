@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { jsonError } from "@/lib/http";
 
 export async function GET(_req: Request, { params }: { params: Promise<{ slug: string }> }) {
   const { slug } = await params;
@@ -7,6 +8,6 @@ export async function GET(_req: Request, { params }: { params: Promise<{ slug: s
     where: { slug },
     include: { items: { include: { menuItem: true } } },
   });
-  if (!drop) return NextResponse.json({ error: "NOT_FOUND" }, { status: 404 });
+  if (!drop) return jsonError("NOT_FOUND");
   return NextResponse.json({ drop });
 }

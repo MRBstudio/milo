@@ -1,9 +1,10 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { jsonError, searchParam } from "@/lib/http";
 
 export async function GET(req: Request) {
-  const phone = new URL(req.url).searchParams.get("phone");
-  if (!phone) return NextResponse.json({ error: "BAD_REQUEST" }, { status: 400 });
+  const phone = searchParam(req, "phone");
+  if (!phone) return jsonError("BAD_REQUEST");
 
   const customer = await prisma.customer.findUnique({
     where: { phone },
