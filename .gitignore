@@ -7,10 +7,10 @@ node_modules/
 .next/
 out/
 
-# env
+# env — only the example file is tracked
 .env
-.env.local
-.env.production.local
+.env.*
+!.env.example
 
 # debug
 npm-debug.log*
