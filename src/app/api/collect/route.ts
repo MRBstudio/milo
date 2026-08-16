@@ -1,16 +1,17 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { isOperator } from "@/lib/auth";
+import { validCode } from "@/lib/validation";
 
 // POST /api/collect — alternative entry point (delegates to operator logic)
 export async function POST(req: Request) {
-  const body = await req.json().catch(() => null);
-  if (!body || !body.code) {
-    return NextResponse.json({ error: "BAD_REQUEST" }, { status: 400 });
+  if (!isOperator(req)) {
+    return NextResponse.json({ error: "UNAUTHORIZED" }, { status: 401 });
   }
 
-  const pw = req.headers.get("x-operator-password");
-  if (pw !== process.env.OPERATOR_PASSWORD) {
-    return NextResponse.json({ error: "UNAUTHORIZED" }, { status: 401 });
+  const body = await req.json().catch(() => null);
+  if (!body || !validCode(body.code)) {
+    return NextResponse.json({ error: "BAD_REQUEST" }, { status: 400 });
   }
 
   const order = await prisma.order.findUnique({

@@ -1,9 +1,13 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { allow, clientIp, tooManyRequests } from "@/lib/rateLimit";
+import { validPhone } from "@/lib/validation";
 
 export async function GET(req: Request) {
+  if (!allow(`passport:${clientIp(req)}`, 10, 60_000)) return tooManyRequests();
+
   const phone = new URL(req.url).searchParams.get("phone");
-  if (!phone) return NextResponse.json({ error: "BAD_REQUEST" }, { status: 400 });
+  if (!validPhone(phone)) return NextResponse.json({ error: "BAD_REQUEST" }, { status: 400 });
 
   const customer = await prisma.customer.findUnique({
     where: { phone },
@@ -20,5 +24,5 @@ export async function GET(req: Request) {
     stamps: p.stamps.map((s) => ({
       dropName: s.drop.name, location: s.drop.location, at: s.collectedAt,
     })),
-  });
+  }, { headers: { "Cache-Control": "no-store" } });
 }
