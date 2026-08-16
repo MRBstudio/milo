@@ -2,6 +2,9 @@
 import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
+import { Msg, requestJson } from "@/lib/api-client";
+import { BackLink, ErrorText, Label, PhoneInput, Row } from "@/components/ui";
+import { PHONE_ERROR_FA, isValidPhone } from "@/lib/validation";
 
 type Item = { id: string; capacity: number; available: number; reserved: number; sold: number; menuItem: { name: string; price: number; description: string } };
 type Drop = { id: string; name: string; location: string; admission: string; status: string; items: Item[] };
@@ -12,12 +15,10 @@ export default function DropPage() {
   const [cart, setCart] = useState<Record<string, number>>({});
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
-  const [msg, setMsg] = useState<{ text: string; ok?: boolean } | null>(null);
+  const [msg, setMsg] = useState<Msg | null>(null);
 
   useEffect(() => {
-    fetch(`/api/drops/${slug}`)
-      .then((r) => r.json())
-      .then((d) => setDrop(d.drop));
+    requestJson<{ drop: Drop }>(`/api/drops/${slug}`).then(({ data }) => setDrop(data.drop));
   }, [slug]);
 
   if (!drop) return <main className="wrap"><p className="muted">Loading…</p></main>;
@@ -35,21 +36,19 @@ export default function DropPage() {
   async function reserve() {
     setMsg(null);
     // Validate phone format client-side
-    if (!/^09\d{9}$/.test(phone)) {
-      setMsg({ text: "شماره موبایل باید ۱۱ رقم و با ۰۹ شروع شود" });
+    if (!isValidPhone(phone)) {
+      setMsg({ text: PHONE_ERROR_FA });
       return;
     }
 
     const lines = Object.entries(cart)
       .filter(([, q]) => q > 0)
       .map(([dropItemId, qty]) => ({ dropItemId, qty }));
-    const res = await fetch("/api/reservations", {
+    const { ok, data } = await requestJson("/api/reservations", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ dropId: drop!.id, name, phone, lines }),
+      body: { dropId: drop!.id, name, phone, lines },
     });
-    const data = await res.json();
-    if (res.ok) {
+    if (ok) {
       setMsg({ text: data.code, ok: true });
     } else {
       setMsg({ text: data.error === "SOLD_OUT" ? "Sold out." : data.error === "ALREADY_RESERVED" ? "You already have a reservation for this drop." : data.error });
@@ -62,17 +61,17 @@ export default function DropPage() {
       <main className="wrap">
         <h1>Reservation Confirmed</h1>
         <div className="card-green" style={{ marginTop: 24, textAlign: "center" }}>
-          <p className="muted" style={{ fontSize: 12, letterSpacing: 3, textTransform: "uppercase" }}>Your Reservation ID</p>
+          <Label>Your Reservation ID</Label>
           <p className="mono" style={{ fontSize: 28, marginTop: 12 }}>{msg.text}</p>
         </div>
 
         <div className="card" style={{ marginTop: 24 }}>
-          <p className="muted" style={{ letterSpacing: 2, textTransform: "uppercase", fontSize: 12 }}>Amount to Transfer</p>
+          <Label letterSpacing={2}>Amount to Transfer</Label>
           <p style={{ fontSize: 24, marginTop: 8 }}>{total.toLocaleString()} <span className="muted" style={{ fontSize: 16 }}>تومان</span></p>
         </div>
 
         <div className="card" style={{ marginTop: 16 }}>
-          <p className="muted" style={{ letterSpacing: 2, textTransform: "uppercase", fontSize: 12 }}>Card Number</p>
+          <Label letterSpacing={2}>Card Number</Label>
           <p className="mono" style={{ fontSize: 20, marginTop: 8, letterSpacing: 3 }}>XXXX XXXX XXXX XXXX</p>
           <p className="muted" style={{ marginTop: 8, fontSize: 13 }}>Cardholder: MILO</p>
         </div>
@@ -132,29 +131,25 @@ export default function DropPage() {
 
       {totalQty > 0 && (
         <div className="card">
-          <p style={{ fontSize: 13, letterSpacing: 1, textTransform: "uppercase" }} className="muted">Your order</p>
+          <Label letterSpacing={1} style={{ fontSize: 13 }}>Your order</Label>
           {drop.items.filter(i => cart[i.id] > 0).map((item) => (
-            <div key={item.id} style={{ display: "flex", justifyContent: "space-between", marginTop: 8 }}>
-              <span>{item.menuItem.name} ×{cart[item.id]}</span>
-              <span className="muted">{(item.menuItem.price * cart[item.id]!).toLocaleString()} T</span>
-            </div>
+            <Row
+              key={item.id}
+              left={<span>{item.menuItem.name} ×{cart[item.id]}</span>}
+              right={<span className="muted">{(item.menuItem.price * cart[item.id]!).toLocaleString()} T</span>}
+            />
           ))}
-          <div style={{ borderTop: "1px solid #3a3a33", marginTop: 12, paddingTop: 12, display: "flex", justifyContent: "space-between" }}>
-            <strong>Total</strong>
-            <strong>{total.toLocaleString()} Toman</strong>
-          </div>
+          <Row
+            style={{ borderTop: "1px solid #3a3a33", marginTop: 12, paddingTop: 12 }}
+            left={<strong>Total</strong>}
+            right={<strong>{total.toLocaleString()} Toman</strong>}
+          />
         </div>
       )}
 
       <div className="card">
         <input placeholder="Your name" value={name} onChange={(e) => setName(e.target.value)} />
-        <input
-          placeholder="Phone (09xxxxxxxxx)"
-          value={phone}
-          onChange={(e) => setPhone(e.target.value)}
-          style={{ marginTop: 8 }}
-          maxLength={11}
-        />
+        <PhoneInput value={phone} onChange={setPhone} style={{ marginTop: 8 }} />
         <p className="muted" style={{ marginTop: 12, fontSize: 13 }}>
           Reserve now → pay by card transfer → collect at the event.
         </p>
@@ -165,12 +160,10 @@ export default function DropPage() {
         >
           Reserve
         </button>
-        {msg && !msg.ok && <p style={{ marginTop: 12, color: "#c45c4a" }}>{msg.text}</p>}
+        {msg && !msg.ok && <ErrorText>{msg.text}</ErrorText>}
       </div>
 
-      <Link href="/">
-        <p className="muted" style={{ marginTop: 32, fontSize: 13 }}>← Back to MILO</p>
-      </Link>
+      <BackLink />
     </main>
   );
 }
