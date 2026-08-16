@@ -1,20 +1,19 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-
-function authorized(req: Request): boolean {
-  const pw = req.headers.get("x-operator-password");
-  return pw === process.env.OPERATOR_PASSWORD;
-}
+import { isOperator } from "@/lib/auth";
+import { allow, clientIp, tooManyRequests } from "@/lib/rateLimit";
+import { validCode, validId } from "@/lib/validation";
 
 export async function POST(req: Request, { params }: { params: Promise<{ action: string }> }) {
-  if (!authorized(req)) return NextResponse.json({ error: "UNAUTHORIZED" }, { status: 401 });
+  if (!allow(`operator:${clientIp(req)}`, 30, 60_000)) return tooManyRequests();
+  if (!isOperator(req)) return NextResponse.json({ error: "UNAUTHORIZED" }, { status: 401 });
   const { action } = await params;
   const body = await req.json().catch(() => ({}));
 
   // 1) Mark order PAID after physical card payment
   if (action === "pay") {
-    const { code } = body as { code: string };
-    if (!code) return NextResponse.json({ error: "BAD_REQUEST" }, { status: 400 });
+    const { code } = body as { code: unknown };
+    if (!validCode(code)) return NextResponse.json({ error: "BAD_REQUEST" }, { status: 400 });
     const order = await prisma.order.findUnique({ where: { code } });
     if (!order) return NextResponse.json({ error: "NOT_FOUND" }, { status: 404 });
     if (order.status !== "RESERVED")
@@ -39,8 +38,8 @@ export async function POST(req: Request, { params }: { params: Promise<{ action:
 
   // 2) Collect / hand over (also mints the Passport stamp)
   if (action === "collect") {
-    const { code } = body as { code: string };
-    if (!code) return NextResponse.json({ error: "BAD_REQUEST" }, { status: 400 });
+    const { code } = body as { code: unknown };
+    if (!validCode(code)) return NextResponse.json({ error: "BAD_REQUEST" }, { status: 400 });
     const order = await prisma.order.findUnique({ where: { code }, include: { drop: true } });
     if (!order) return NextResponse.json({ error: "NOT_FOUND" }, { status: 404 });
     if (order.status !== "PAID")
@@ -76,8 +75,8 @@ export async function POST(req: Request, { params }: { params: Promise<{ action:
 
   // 3) Cancel a reservation
   if (action === "cancel") {
-    const { code } = body as { code: string };
-    if (!code) return NextResponse.json({ error: "BAD_REQUEST" }, { status: 400 });
+    const { code } = body as { code: unknown };
+    if (!validCode(code)) return NextResponse.json({ error: "BAD_REQUEST" }, { status: 400 });
     const order = await prisma.order.findUnique({
       where: { code },
       include: { lines: true },
@@ -104,12 +103,13 @@ export async function POST(req: Request, { params }: { params: Promise<{ action:
 
   // 4) Safe mode / reopen
   if (action === "safe-mode" || action === "reopen") {
-    const { dropId } = body as { dropId: string };
-    if (!dropId) return NextResponse.json({ error: "BAD_REQUEST" }, { status: 400 });
-    await prisma.drop.update({
+    const { dropId } = body as { dropId: unknown };
+    if (!validId(dropId)) return NextResponse.json({ error: "BAD_REQUEST" }, { status: 400 });
+    const updated = await prisma.drop.updateMany({
       where: { id: dropId },
       data: { admission: action === "safe-mode" ? "PAUSED" : "OPEN" },
     });
+    if (updated.count === 0) return NextResponse.json({ error: "NOT_FOUND" }, { status: 404 });
     return NextResponse.json({ ok: true });
   }
 
@@ -118,9 +118,10 @@ export async function POST(req: Request, { params }: { params: Promise<{ action:
 
 // Live view for the operator dashboard
 export async function GET(req: Request) {
-  if (!authorized(req)) return NextResponse.json({ error: "UNAUTHORIZED" }, { status: 401 });
+  if (!allow(`operator:${clientIp(req)}`, 60, 60_000)) return tooManyRequests();
+  if (!isOperator(req)) return NextResponse.json({ error: "UNAUTHORIZED" }, { status: 401 });
   const dropId = new URL(req.url).searchParams.get("dropId");
-  if (!dropId) return NextResponse.json({ error: "BAD_REQUEST" }, { status: 400 });
+  if (!validId(dropId)) return NextResponse.json({ error: "BAD_REQUEST" }, { status: 400 });
 
   const [items, statusCounts] = await Promise.all([
     prisma.dropItem.findMany({ where: { dropId }, include: { menuItem: true } }),

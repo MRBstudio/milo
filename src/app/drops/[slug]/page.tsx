@@ -2,6 +2,7 @@
 import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
+import { MAX_NAME_LENGTH, MAX_QTY_PER_ITEM } from "@/lib/validation";
 
 type Item = { id: string; capacity: number; available: number; reserved: number; sold: number; menuItem: { name: string; price: number; description: string } };
 type Drop = { id: string; name: string; location: string; admission: string; status: string; items: Item[] };
@@ -22,7 +23,8 @@ export default function DropPage() {
 
   if (!drop) return <main className="wrap"><p className="muted">Loading…</p></main>;
 
-  const add = (id: string) => setCart((c) => ({ ...c, [id]: (c[id] ?? 0) + 1 }));
+  const add = (id: string, available: number) =>
+    setCart((c) => ({ ...c, [id]: Math.min((c[id] ?? 0) + 1, available, MAX_QTY_PER_ITEM) }));
   const remove = (id: string) => setCart((c) => {
     const next = { ...c };
     if (next[id] > 1) next[id]--;
@@ -123,7 +125,11 @@ export default function DropPage() {
               <div style={{ display: "flex", gap: 6, marginTop: 6, alignItems: "center" }}>
                 {inCart > 0 && <button onClick={() => remove(item.id)} style={{ padding: "6px 12px" }}>−</button>}
                 {inCart > 0 && <span style={{ minWidth: 20, textAlign: "center" }}>{inCart}</span>}
-                <button onClick={() => add(item.id)} disabled={item.available === 0} style={{ padding: "6px 12px" }}>+</button>
+                <button
+                  onClick={() => add(item.id, item.available)}
+                  disabled={item.available === 0 || inCart >= Math.min(item.available, MAX_QTY_PER_ITEM)}
+                  style={{ padding: "6px 12px" }}
+                >+</button>
               </div>
             </div>
           </div>
@@ -147,7 +153,7 @@ export default function DropPage() {
       )}
 
       <div className="card">
-        <input placeholder="Your name" value={name} onChange={(e) => setName(e.target.value)} />
+        <input placeholder="Your name" value={name} onChange={(e) => setName(e.target.value)} maxLength={MAX_NAME_LENGTH} />
         <input
           placeholder="Phone (09xxxxxxxxx)"
           value={phone}
