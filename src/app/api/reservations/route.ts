@@ -1,92 +1,99 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { randomBytes } from "crypto";
+import { ApiError, parseJsonBody, requireString, route } from "@/lib/http";
 
 /** Validate Iranian phone number (09xx xxx xxxx) */
 function validPhone(phone: string): boolean {
   return /^09\d{9}$/.test(phone);
 }
 
-export async function POST(req: Request) {
-  const body = await req.json().catch(() => null);
-  if (!body) return NextResponse.json({ error: "BAD_REQUEST" }, { status: 400 });
+type Line = { dropItemId: string; qty: number };
 
-  const { dropId, name, phone, lines } = body as {
-    dropId: string; name: string; phone: string;
-    lines: { dropItemId: string; qty: number }[];
-  };
+function parseLines(value: unknown): Line[] {
+  if (!Array.isArray(value) || value.length === 0) throw new ApiError("BAD_REQUEST", 400);
+  return value.map((line) => {
+    const dropItemId = (line as Line)?.dropItemId;
+    const qty = (line as Line)?.qty;
+    if (typeof dropItemId !== "string" || !dropItemId || !Number.isInteger(qty) || qty < 1) {
+      throw new ApiError("BAD_ITEM", 400);
+    }
+    return { dropItemId, qty };
+  });
+}
 
-  if (!dropId || !name || !phone || !Array.isArray(lines) || lines.length === 0) {
-    return NextResponse.json({ error: "BAD_REQUEST" }, { status: 400 });
+type Tx = Parameters<Parameters<typeof prisma.$transaction>[0]>[0];
+
+/** Picks a pickup code that is not taken, instead of letting a collision surface as a 500. */
+async function unusedCode(tx: Tx): Promise<string> {
+  for (let attempt = 0; attempt < 10; attempt++) {
+    const code = "MILO-" + randomBytes(2).toString("hex").toUpperCase();
+    const taken = await tx.order.findUnique({ where: { code }, select: { id: true } });
+    if (!taken) return code;
   }
+  throw new ApiError("CODE_EXHAUSTED", 503);
+}
 
-  if (!validPhone(phone)) {
-    return NextResponse.json({ error: "INVALID_PHONE" }, { status: 400 });
-  }
+export const POST = route("reservations.create", async (req: Request) => {
+  const body = await parseJsonBody(req);
+  const dropId = requireString(body, "dropId");
+  const name = requireString(body, "name");
+  const phone = requireString(body, "phone");
+  const lines = parseLines(body.lines);
 
-  try {
-    const order = await prisma.$transaction(async (tx) => {
-      const drop = await tx.drop.findUnique({ where: { id: dropId } });
-      if (!drop) throw new Error("DROP_NOT_FOUND");
-      if (drop.admission !== "OPEN") throw new Error("DROP_PAUSED");
+  if (!validPhone(phone)) throw new ApiError("INVALID_PHONE", 400);
 
-      // Upsert customer by phone
-      const customer = await tx.customer.upsert({
-        where: { phone },
-        update: { name },
-        create: { phone, name },
-      });
+  const order = await prisma.$transaction(async (tx) => {
+    const drop = await tx.drop.findUnique({ where: { id: dropId } });
+    if (!drop) throw new ApiError("DROP_NOT_FOUND", 404);
+    if (drop.admission !== "OPEN") throw new ApiError("DROP_PAUSED", 403);
 
-      // One active reservation per phone per drop
-      const existing = await tx.order.count({
-        where: { dropId, customerId: customer.id, status: { in: ["RESERVED", "PAID"] } },
-      });
-      if (existing > 0) throw new Error("ALREADY_RESERVED");
-
-      let total = 0;
-      const lineData: { dropItemId: string; qty: number; unitPrice: number }[] = [];
-
-      // Atomic inventory decrement — the no-oversell guard
-      for (const line of lines) {
-        if (!line.dropItemId || !line.qty || line.qty < 1) throw new Error("BAD_ITEM");
-
-        const item = await tx.dropItem.findUnique({
-          where: { id: line.dropItemId },
-          include: { menuItem: true },
-        });
-        if (!item || item.dropId !== dropId) throw new Error("BAD_ITEM");
-        if (!item.menuItem) throw new Error("BAD_ITEM");
-
-        const updated = await tx.dropItem.updateMany({
-          where: { id: line.dropItemId, available: { gte: line.qty } },
-          data: {
-            available: { decrement: line.qty },
-            reserved: { increment: line.qty },
-          },
-        });
-        if (updated.count === 0) throw new Error("SOLD_OUT");
-
-        total += item.menuItem.price * line.qty;
-        lineData.push({ dropItemId: line.dropItemId, qty: line.qty, unitPrice: item.menuItem.price });
-      }
-
-      const code = "MILO-" + randomBytes(2).toString("hex").toUpperCase();
-
-      return tx.order.create({
-        data: {
-          dropId, customerId: customer.id, total, code,
-          lines: { create: lineData },
-        },
-      });
+    // Upsert customer by phone
+    const customer = await tx.customer.upsert({
+      where: { phone },
+      update: { name },
+      create: { phone, name },
     });
 
-    return NextResponse.json({ ok: true, code: order.code, total: order.total });
-  } catch (e: any) {
-    const map: Record<string, number> = {
-      DROP_NOT_FOUND: 404, DROP_PAUSED: 403, ALREADY_RESERVED: 409,
-      SOLD_OUT: 409, BAD_ITEM: 400, INVALID_PHONE: 400,
-    };
-    const msg = e?.message ?? "ERROR";
-    return NextResponse.json({ error: msg }, { status: map[msg] ?? 500 });
-  }
-}
+    // One active reservation per phone per drop
+    const existing = await tx.order.count({
+      where: { dropId, customerId: customer.id, status: { in: ["RESERVED", "PAID"] } },
+    });
+    if (existing > 0) throw new ApiError("ALREADY_RESERVED", 409);
+
+    let total = 0;
+    const lineData: { dropItemId: string; qty: number; unitPrice: number }[] = [];
+
+    // Atomic inventory decrement — the no-oversell guard
+    for (const line of lines) {
+      const item = await tx.dropItem.findUnique({
+        where: { id: line.dropItemId },
+        include: { menuItem: true },
+      });
+      if (!item || item.dropId !== dropId || !item.menuItem) throw new ApiError("BAD_ITEM", 400);
+
+      const updated = await tx.dropItem.updateMany({
+        where: { id: line.dropItemId, available: { gte: line.qty } },
+        data: {
+          available: { decrement: line.qty },
+          reserved: { increment: line.qty },
+        },
+      });
+      if (updated.count === 0) throw new ApiError("SOLD_OUT", 409);
+
+      total += item.menuItem.price * line.qty;
+      lineData.push({ dropItemId: line.dropItemId, qty: line.qty, unitPrice: item.menuItem.price });
+    }
+
+    const code = await unusedCode(tx);
+
+    return tx.order.create({
+      data: {
+        dropId, customerId: customer.id, total, code,
+        lines: { create: lineData },
+      },
+    });
+  });
+
+  return NextResponse.json({ ok: true, code: order.code, total: order.total });
+});

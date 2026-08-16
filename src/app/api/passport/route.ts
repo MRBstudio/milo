@@ -1,9 +1,10 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { ApiError, route } from "@/lib/http";
 
-export async function GET(req: Request) {
+export const GET = route("passport.get", async (req: Request) => {
   const phone = new URL(req.url).searchParams.get("phone");
-  if (!phone) return NextResponse.json({ error: "BAD_REQUEST" }, { status: 400 });
+  if (!phone) throw new ApiError("BAD_REQUEST", 400);
 
   const customer = await prisma.customer.findUnique({
     where: { phone },
@@ -21,4 +22,4 @@ export async function GET(req: Request) {
       dropName: s.drop.name, location: s.drop.location, at: s.collectedAt,
     })),
   });
-}
+});

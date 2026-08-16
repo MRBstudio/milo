@@ -1,17 +1,26 @@
 "use client";
 import { useState } from "react";
 import Link from "next/link";
+import { errorMessage, fetchJson } from "@/lib/api-client";
 
 export default function PassportPage() {
   const [phone, setPhone] = useState("");
   const [data, setData] = useState<any>(null);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   async function look() {
     setLoading(true);
-    const res = await fetch(`/api/passport?phone=${encodeURIComponent(phone)}`);
-    setData(await res.json());
-    setLoading(false);
+    setError(null);
+    try {
+      setData(await fetchJson(`/api/passport?phone=${encodeURIComponent(phone)}`));
+    } catch (err) {
+      console.error("Passport lookup failed", err);
+      setData(null);
+      setError(errorMessage(err));
+    } finally {
+      setLoading(false);
+    }
   }
 
   return (
@@ -22,6 +31,7 @@ export default function PassportPage() {
         <button onClick={look} disabled={loading || phone.length < 11} style={{ marginTop: 8 }}>
           {loading ? "…" : "Open passport"}
         </button>
+        {error && <p style={{ marginTop: 12, color: "#c45c4a" }}>{error}</p>}
       </div>
       {data && !data.exists && (
         <p className="muted" style={{ marginTop: 16 }}>
