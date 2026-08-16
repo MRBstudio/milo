@@ -1,130 +1,105 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { ApiError, parseJsonBody, requireOperator, requireString, route } from "@/lib/http";
+import { collectOrder } from "@/lib/orders";
 
-function authorized(req: Request): boolean {
-  const pw = req.headers.get("x-operator-password");
-  return pw === process.env.OPERATOR_PASSWORD;
-}
+export const POST = route(
+  "operator.action",
+  async (req: Request, { params }: { params: Promise<{ action: string }> }) => {
+    requireOperator(req);
+    const { action } = await params;
+    const body = await parseJsonBody(req);
 
-export async function POST(req: Request, { params }: { params: Promise<{ action: string }> }) {
-  if (!authorized(req)) return NextResponse.json({ error: "UNAUTHORIZED" }, { status: 401 });
-  const { action } = await params;
-  const body = await req.json().catch(() => ({}));
+    // 1) Mark order PAID after physical card payment
+    if (action === "pay") {
+      const code = requireString(body, "code");
+      const order = await prisma.order.findUnique({ where: { code } });
+      if (!order) throw new ApiError("NOT_FOUND", 404);
+      if (order.status !== "RESERVED") throw new ApiError(order.status, 409);
 
-  // 1) Mark order PAID after physical card payment
-  if (action === "pay") {
-    const { code } = body as { code: string };
-    if (!code) return NextResponse.json({ error: "BAD_REQUEST" }, { status: 400 });
-    const order = await prisma.order.findUnique({ where: { code } });
-    if (!order) return NextResponse.json({ error: "NOT_FOUND" }, { status: 404 });
-    if (order.status !== "RESERVED")
-      return NextResponse.json({ error: order.status }, { status: 409 });
-
-    await prisma.$transaction(async (tx) => {
-      await tx.order.update({
-        where: { id: order.id },
-        data: { status: "PAID", paidAt: new Date() },
-      });
-      // reserved -> sold
-      const lines = await tx.orderLine.findMany({ where: { orderId: order.id } });
-      for (const l of lines) {
-        await tx.dropItem.updateMany({
-          where: { id: l.dropItemId, reserved: { gte: l.qty } },
-          data: { reserved: { decrement: l.qty }, sold: { increment: l.qty } },
+      await prisma.$transaction(async (tx) => {
+        const claimed = await tx.order.updateMany({
+          where: { id: order.id, status: "RESERVED" },
+          data: { status: "PAID", paidAt: new Date() },
         });
-      }
-    });
-    return NextResponse.json({ ok: true, code });
-  }
+        if (claimed.count === 0) throw new ApiError("ALREADY_PAID", 409);
 
-  // 2) Collect / hand over (also mints the Passport stamp)
-  if (action === "collect") {
-    const { code } = body as { code: string };
-    if (!code) return NextResponse.json({ error: "BAD_REQUEST" }, { status: 400 });
-    const order = await prisma.order.findUnique({ where: { code }, include: { drop: true } });
-    if (!order) return NextResponse.json({ error: "NOT_FOUND" }, { status: 404 });
-    if (order.status !== "PAID")
-      return NextResponse.json({ error: order.status }, { status: 409 });
+        // reserved -> sold
+        const lines = await tx.orderLine.findMany({ where: { orderId: order.id } });
+        for (const l of lines) {
+          const moved = await tx.dropItem.updateMany({
+            where: { id: l.dropItemId, reserved: { gte: l.qty } },
+            data: { reserved: { decrement: l.qty }, sold: { increment: l.qty } },
+          });
+          if (moved.count === 0) {
+            throw new ApiError("INVENTORY_CONFLICT", 409, {
+              cause: new Error(`order ${order.id} line ${l.id}: dropItem ${l.dropItemId} has fewer than ${l.qty} reserved`),
+            });
+          }
+        }
+      });
+      return NextResponse.json({ ok: true, code });
+    }
 
-    await prisma.$transaction(async (tx) => {
-      await tx.order.update({
-        where: { id: order.id },
-        data: { status: "COLLECTED", collectedAt: new Date() },
-      });
-      // Passport stamp (idempotent via unique [passportId, dropId])
-      let passport = await tx.passport.findUnique({
-        where: { customerId: order.customerId },
-      });
-      if (!passport) {
-        const counter = await tx.passportCounter.upsert({
-          where: { id: "one" },
-          update: { nextNumber: { increment: 1 } },
-          create: { id: "one", nextNumber: 2 },
+    // 2) Collect / hand over (also mints the Passport stamp)
+    if (action === "collect") {
+      return collectOrder(requireString(body, "code"));
+    }
+
+    // 3) Cancel a reservation
+    if (action === "cancel") {
+      const code = requireString(body, "code");
+      const order = await prisma.order.findUnique({ where: { code }, include: { lines: true } });
+      if (!order) throw new ApiError("NOT_FOUND", 404);
+      if (order.status !== "RESERVED") throw new ApiError(order.status, 409);
+
+      await prisma.$transaction(async (tx) => {
+        const claimed = await tx.order.updateMany({
+          where: { id: order.id, status: "RESERVED" },
+          data: { status: "CANCELLED" },
         });
-        passport = await tx.passport.create({
-          data: { customerId: order.customerId, travelerNumber: counter.nextNumber - 1 },
-        });
-      }
-      await tx.stamp.upsert({
-        where: { passportId_dropId: { passportId: passport.id, dropId: order.dropId } },
-        create: { passportId: passport.id, dropId: order.dropId, orderId: order.id },
-        update: {},
+        if (claimed.count === 0) throw new ApiError("ALREADY_CANCELLED", 409);
+
+        // Release inventory: reserved -> available
+        for (const l of order.lines) {
+          const released = await tx.dropItem.updateMany({
+            where: { id: l.dropItemId, reserved: { gte: l.qty } },
+            data: { reserved: { decrement: l.qty }, available: { increment: l.qty } },
+          });
+          if (released.count === 0) {
+            throw new ApiError("INVENTORY_CONFLICT", 409, {
+              cause: new Error(`order ${order.id} line ${l.id}: dropItem ${l.dropItemId} has fewer than ${l.qty} reserved`),
+            });
+          }
+        }
       });
-    });
-    return NextResponse.json({ ok: true, code });
-  }
+      return NextResponse.json({ ok: true, code });
+    }
 
-  // 3) Cancel a reservation
-  if (action === "cancel") {
-    const { code } = body as { code: string };
-    if (!code) return NextResponse.json({ error: "BAD_REQUEST" }, { status: 400 });
-    const order = await prisma.order.findUnique({
-      where: { code },
-      include: { lines: true },
-    });
-    if (!order) return NextResponse.json({ error: "NOT_FOUND" }, { status: 404 });
-    if (order.status !== "RESERVED")
-      return NextResponse.json({ error: order.status }, { status: 409 });
-
-    await prisma.$transaction(async (tx) => {
-      await tx.order.update({
-        where: { id: order.id },
-        data: { status: "CANCELLED" },
+    // 4) Safe mode / reopen
+    if (action === "safe-mode" || action === "reopen") {
+      const dropId = requireString(body, "dropId");
+      const updated = await prisma.drop.updateMany({
+        where: { id: dropId },
+        data: { admission: action === "safe-mode" ? "PAUSED" : "OPEN" },
       });
-      // Release inventory: reserved -> available
-      for (const l of order.lines) {
-        await tx.dropItem.updateMany({
-          where: { id: l.dropItemId, reserved: { gte: l.qty } },
-          data: { reserved: { decrement: l.qty }, available: { increment: l.qty } },
-        });
-      }
-    });
-    return NextResponse.json({ ok: true, code });
-  }
+      if (updated.count === 0) throw new ApiError("NOT_FOUND", 404);
+      return NextResponse.json({ ok: true });
+    }
 
-  // 4) Safe mode / reopen
-  if (action === "safe-mode" || action === "reopen") {
-    const { dropId } = body as { dropId: string };
-    if (!dropId) return NextResponse.json({ error: "BAD_REQUEST" }, { status: 400 });
-    await prisma.drop.update({
-      where: { id: dropId },
-      data: { admission: action === "safe-mode" ? "PAUSED" : "OPEN" },
-    });
-    return NextResponse.json({ ok: true });
-  }
-
-  return NextResponse.json({ error: "UNKNOWN_ACTION" }, { status: 400 });
-}
+    throw new ApiError("UNKNOWN_ACTION", 400);
+  },
+);
 
 // Live view for the operator dashboard
-export async function GET(req: Request) {
-  if (!authorized(req)) return NextResponse.json({ error: "UNAUTHORIZED" }, { status: 401 });
+export const GET = route("operator.live", async (req: Request) => {
+  requireOperator(req);
   const dropId = new URL(req.url).searchParams.get("dropId");
-  if (!dropId) return NextResponse.json({ error: "BAD_REQUEST" }, { status: 400 });
+  if (!dropId) throw new ApiError("BAD_REQUEST", 400);
 
   const [items, statusCounts] = await Promise.all([
     prisma.dropItem.findMany({ where: { dropId }, include: { menuItem: true } }),
     prisma.order.groupBy({ by: ["status"], where: { dropId }, _count: { _all: true } }),
   ]);
   return NextResponse.json({ items, statusCounts });
-}
+});
