@@ -1,0 +1,128 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum DropStatus {
+  SCHEDULED
+  LIVE
+  SOLD_OUT
+  CLOSED
+}
+
+enum Admission {
+  OPEN
+  PAUSED
+}
+
+enum OrderStatus {
+  RESERVED
+  PAID
+  COLLECTED
+  CANCELLED
+  EXPIRED
+}
+
+model Drop {
+  id         String      @id @default(cuid())
+  name       String
+  slug       String      @unique
+  location   String
+  startsAt   DateTime
+  endsAt     DateTime?
+  status     DropStatus  @default(SCHEDULED)
+  admission  Admission  @default(OPEN)
+  storyLine  String?
+  items      DropItem[]
+  orders     Order[]
+  stamps     Stamp[]
+  createdAt  DateTime    @default(now())
+  updatedAt  DateTime    @updatedAt
+}
+
+model MenuItem {
+  id          String     @id @default(cuid())
+  name        String
+  slug        String     @unique
+  description String?
+  price       Int
+  drops       DropItem[]
+}
+
+model DropItem {
+  id         String   @id @default(cuid())
+  dropId     String
+  menuItemId String
+  drop       Drop     @relation(fields: [dropId], references: [id], onDelete: Cascade)
+  menuItem   MenuItem @relation(fields: [menuItemId], references: [id])
+  capacity   Int
+  available  Int
+  reserved   Int      @default(0)
+  sold       Int      @default(0)
+
+  @@unique([dropId, menuItemId])
+}
+
+model Customer {
+  id       String    @id @default(cuid())
+  phone    String    @unique
+  name     String
+  orders   Order[]
+  passport Passport?
+}
+
+model Order {
+  id          String      @id @default(cuid())
+  dropId      String
+  customerId  String
+  drop        Drop        @relation(fields: [dropId], references: [id])
+  customer    Customer    @relation(fields: [customerId], references: [id])
+  status      OrderStatus @default(RESERVED)
+  total       Int
+  code        String      @unique
+  lines       OrderLine[]
+  paidAt      DateTime?
+  collectedAt DateTime?
+  createdAt   DateTime    @default(now())
+
+  @@index([dropId, status])
+}
+
+model OrderLine {
+  id         String @id @default(cuid())
+  orderId    String
+  dropItemId String
+  order      Order  @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  qty        Int
+  unitPrice  Int
+}
+
+model Passport {
+  id             String   @id @default(cuid())
+  customerId     String   @unique
+  customer       Customer @relation(fields: [customerId], references: [id])
+  travelerNumber Int      @unique
+  stamps         Stamp[]
+  createdAt      DateTime @default(now())
+}
+
+model Stamp {
+  id          String   @id @default(cuid())
+  passportId  String
+  dropId      String
+  orderId     String   @unique
+  passport    Passport @relation(fields: [passportId], references: [id], onDelete: Cascade)
+  drop        Drop     @relation(fields: [dropId], references: [id])
+  collectedAt DateTime @default(now())
+
+  @@unique([passportId, dropId])
+}
+
+model PassportCounter {
+  id         String @id @default("one")
+  nextNumber Int    @default(1)
+}
