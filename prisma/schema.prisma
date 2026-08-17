@@ -36,7 +36,7 @@ model Drop {
   startsAt   DateTime
   endsAt     DateTime?
   status     DropStatus  @default(SCHEDULED)
-  admission  Admission  @default(OPEN)
+  admission  Admission   @default(OPEN)
   storyLine  String?
   items      DropItem[]
   orders     Order[]
