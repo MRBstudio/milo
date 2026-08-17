@@ -46,29 +46,34 @@ export async function POST(req: Request) {
       let total = 0;
       const lineData: { dropItemId: string; qty: number; unitPrice: number }[] = [];
 
-      // Atomic inventory decrement — the no-oversell guard
-      for (const line of lines) {
-        if (!line.dropItemId || !line.qty || line.qty < 1) throw new Error("BAD_ITEM");
+       // Atomic inventory decrement — the no-oversell guard
+       for (const line of lines) {
+         if (!line.dropItemId || !line.qty || line.qty < 1) throw new Error("BAD_ITEM");
 
-        const item = await tx.dropItem.findUnique({
-          where: { id: line.dropItemId },
-          include: { menuItem: true },
-        });
-        if (!item || item.dropId !== dropId) throw new Error("BAD_ITEM");
-        if (!item.menuItem) throw new Error("BAD_ITEM");
+         const item = await tx.dropItem.findUnique({
+           where: { id: line.dropItemId },
+           include: { menuItem: true },
+         });
+         if (!item || item.dropId !== dropId) throw new Error("BAD_ITEM");
+         if (!item.menuItem) throw new Error("BAD_ITEM");
 
-        const updated = await tx.dropItem.updateMany({
-          where: { id: line.dropItemId, available: { gte: line.qty } },
-          data: {
-            available: { decrement: line.qty },
-            reserved: { increment: line.qty },
-          },
-        });
-        if (updated.count === 0) throw new Error("SOLD_OUT");
+         // Use a database-level lock to prevent race conditions
+         const updated = await tx.$executeRaw`
+           UPDATE "DropItem" 
+           SET 
+             "available" = "available" - ${line.qty},
+             "reserved" = "reserved" + ${line.qty}
+           WHERE 
+             "id" = ${line.dropItemId} 
+             AND "available" >= ${line.qty}
+             FOR UPDATE
+         `;
+         
+         if (updated === 0) throw new Error("SOLD_OUT");
 
-        total += item.menuItem.price * line.qty;
-        lineData.push({ dropItemId: line.dropItemId, qty: line.qty, unitPrice: item.menuItem.price });
-      }
+         total += item.menuItem.price * line.qty;
+         lineData.push({ dropItemId: line.dropItemId, qty: line.qty, unitPrice: item.menuItem.price });
+       }
 
       const code = "MILO-" + randomBytes(2).toString("hex").toUpperCase();
 

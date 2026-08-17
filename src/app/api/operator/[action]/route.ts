@@ -1,9 +1,26 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 
+import { randomBytes, timingSafeEqual } from "crypto";
+
 function authorized(req: Request): boolean {
-  const pw = req.headers.get("x-operator-password");
-  return pw === process.env.OPERATOR_PASSWORD;
+  const providedPassword = req.headers.get("x-operator-password");
+  const expectedPassword = process.env.OPERATOR_PASSWORD;
+  
+  // Return early if either password is not set
+  if (!providedPassword || !expectedPassword) {
+    return false;
+  }
+  
+  // Use timingSafeEqual to prevent timing attacks
+  const providedBuffer = Buffer.from(providedPassword, 'utf8');
+  const expectedBuffer = Buffer.from(expectedPassword, 'utf8');
+  
+  if (providedBuffer.length !== expectedBuffer.length) {
+    return false;
+  }
+  
+  return timingSafeEqual(providedBuffer, expectedBuffer);
 }
 
 export async function POST(req: Request, { params }: { params: Promise<{ action: string }> }) {
