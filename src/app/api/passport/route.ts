@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { clientIp, rateLimit } from "@/lib/rate-limit";
 
 interface BasePassportResponse {
   exists: boolean;
@@ -27,6 +28,17 @@ interface ErrorResponse {
 type PassportResponse = ValidPassportResponse | InvalidPassportResponse | ErrorResponse;
 
 export async function GET(req: Request) {
+  // Phone numbers are enumerable: keep lookups supervised so an open
+  // indexer cannot walk the customer base. (Limits are per server instance.)
+  const limiter = rateLimit(`passport-lookup:${clientIp(req)}`, { limit: 20, windowMs: 60_000 });
+  if (!limiter.ok) {
+    const response: ErrorResponse = { error: "TOO_MANY_REQUESTS" };
+    return NextResponse.json(response, {
+      status: 429,
+      headers: { "Retry-After": String(limiter.retryAfterSeconds) },
+    });
+  }
+
   const phone = new URL(req.url).searchParams.get("phone");
   if (!phone) {
     const response: PassportResponse = { error: "BAD_REQUEST" };

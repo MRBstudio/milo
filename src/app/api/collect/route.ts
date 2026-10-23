@@ -1,15 +1,26 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { isAuthorizedOperator } from "@/lib/secure-compare";
+import { clientIp, rateLimit } from "@/lib/rate-limit";
 
 // POST /api/collect — alternative entry point (delegates to operator logic)
 export async function POST(req: Request) {
+  // Brute-force guard: operator password guesses must not run unsupervised.
+  const limiter = rateLimit(`collector-passphrase:${clientIp(req)}`, { limit: 10, windowMs: 60_000 });
+  if (!limiter.ok) {
+    return NextResponse.json(
+      { error: "TOO_MANY_REQUESTS" },
+      { status: 429, headers: { "Retry-After": String(limiter.retryAfterSeconds) } },
+    );
+  }
+
   const body = await req.json().catch(() => null);
   if (!body || !body.code) {
     return NextResponse.json({ error: "BAD_REQUEST" }, { status: 400 });
   }
 
   const pw = req.headers.get("x-operator-password");
-  if (pw !== process.env.OPERATOR_PASSWORD) {
+  if (!isAuthorizedOperator(pw, process.env.OPERATOR_PASSWORD)) {
     return NextResponse.json({ error: "UNAUTHORIZED" }, { status: 401 });
   }
 

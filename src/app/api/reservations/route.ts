@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { randomBytes } from "crypto";
+import { clientIp, rateLimit } from "@/lib/rate-limit";
 
 /** Validate Iranian phone number (09xx xxx xxxx) */
 function validPhone(phone: string): boolean {
@@ -8,6 +9,15 @@ function validPhone(phone: string): boolean {
 }
 
 export async function POST(req: Request) {
+  // Public write endpoint: guard against scripted floods before touching Prisma.
+  const limiter = rateLimit(`make-reservation:${clientIp(req)}`, { limit: 10, windowMs: 60_000 });
+  if (!limiter.ok) {
+    return NextResponse.json(
+      { error: "TOO_MANY_REQUESTS" },
+      { status: 429, headers: { "Retry-After": String(limiter.retryAfterSeconds) } },
+    );
+  }
+
   const body = await req.json().catch(() => null);
   if (!body) return NextResponse.json({ error: "BAD_REQUEST" }, { status: 400 });
 
@@ -75,7 +85,7 @@ export async function POST(req: Request) {
          lineData.push({ dropItemId: line.dropItemId, qty: line.qty, unitPrice: item.menuItem.price });
        }
 
-      const code = "MILO-" + randomBytes(2).toString("hex").toUpperCase();
+      const code = "MILO-" + randomBytes(6).toString("hex").toUpperCase();
 
       return tx.order.create({
         data: {

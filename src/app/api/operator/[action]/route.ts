@@ -1,30 +1,21 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 
-import { randomBytes, timingSafeEqual } from "crypto";
-
-function authorized(req: Request): boolean {
-  const providedPassword = req.headers.get("x-operator-password");
-  const expectedPassword = process.env.OPERATOR_PASSWORD;
-  
-  // Return early if either password is not set
-  if (!providedPassword || !expectedPassword) {
-    return false;
-  }
-  
-  // Use timingSafeEqual to prevent timing attacks
-  const providedBuffer = Buffer.from(providedPassword, 'utf8');
-  const expectedBuffer = Buffer.from(expectedPassword, 'utf8');
-  
-  if (providedBuffer.length !== expectedBuffer.length) {
-    return false;
-  }
-  
-  return timingSafeEqual(providedBuffer, expectedBuffer);
-}
+import { isAuthorizedOperator } from "@/lib/secure-compare";
+import { clientIp, rateLimit } from "@/lib/rate-limit";
 
 export async function POST(req: Request, { params }: { params: Promise<{ action: string }> }) {
-  if (!authorized(req)) return NextResponse.json({ error: "UNAUTHORIZED" }, { status: 401 });
+  // Brute-force guard before any password comparison.
+  const limiter = rateLimit(`operator-passphrase:${clientIp(req)}`, { limit: 10, windowMs: 60_000 });
+  if (!limiter.ok) {
+    return NextResponse.json(
+      { error: "TOO_MANY_REQUESTS" },
+      { status: 429, headers: { "Retry-After": String(limiter.retryAfterSeconds) } },
+    );
+  }
+  if (!isAuthorizedOperator(req.headers.get("x-operator-password"), process.env.OPERATOR_PASSWORD)) {
+    return NextResponse.json({ error: "UNAUTHORIZED" }, { status: 401 });
+  }
   const { action } = await params;
   const body = await req.json().catch(() => ({}));
 
@@ -135,7 +126,9 @@ export async function POST(req: Request, { params }: { params: Promise<{ action:
 
 // Live view for the operator dashboard
 export async function GET(req: Request) {
-  if (!authorized(req)) return NextResponse.json({ error: "UNAUTHORIZED" }, { status: 401 });
+  if (!isAuthorizedOperator(req.headers.get("x-operator-password"), process.env.OPERATOR_PASSWORD)) {
+    return NextResponse.json({ error: "UNAUTHORIZED" }, { status: 401 });
+  }
   const dropId = new URL(req.url).searchParams.get("dropId");
   if (!dropId) return NextResponse.json({ error: "BAD_REQUEST" }, { status: 400 });
 
