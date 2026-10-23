@@ -19,3 +19,7 @@ npm-debug.log*
 *.tsbuildinfo
 next-env.d.ts
 .vercel
+
+# env — keep every real environment out of Git; only .env.example is tracked
+.env*
+!.env.example
